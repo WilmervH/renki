@@ -65,8 +65,9 @@ COPY . .
 RUN pnpm --filter @renki/protocol build && pnpm --filter @renki/client-core build && pnpm --filter @renki/daemon build
 
 # Self-contained prod-only output: resolves the @renki/protocol workspace
-# dependency to its built dist rather than a symlink.
-RUN pnpm --filter @renki/daemon deploy --prod /app/deploy
+# dependency to its built dist rather than a symlink. Written outside /app so
+# it can't collide with a source folder (the repo has its own deploy/).
+RUN pnpm --filter @renki/daemon deploy --prod /out/daemon
 
 FROM node:20-bookworm-slim AS runtime
 
@@ -127,7 +128,7 @@ RUN git config --system credential."https://github.com".helper '!gh auth git-cre
     && git config --system credential."https://gist.github.com".helper '!gh auth git-credential'
 
 WORKDIR /app
-COPY --from=builder /app/deploy .
+COPY --from=builder /out/daemon .
 
 # Headless Chromium for PDF export (apps/daemon/src/export/pdf.ts), from the
 # daemon's own Playwright so the versions match. Installed outside /root:

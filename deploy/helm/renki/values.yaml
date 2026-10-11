@@ -1,0 +1,115 @@
+# Renki on Kubernetes: the daemon (a single-replica StatefulSet — it owns a
+# SQLite db and per-session git worktrees) plus the web app, whose nginx
+# proxies /api/* (REST + WebSocket) to the daemon. Browsers load the web app
+# and find the daemon on the same origin; the only thing they need is the
+# token, which they keep themselves. See docs/kubernetes.md.
+
+image:
+  daemon:
+    repository: ghcr.io/wilmervh/renki
+    # Defaults to the chart's appVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+  web:
+    repository: ghcr.io/wilmervh/renki-web
+    tag: ""
+    pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Secret holding the keys below. With existingSecret set, the chart creates no
+# Secret and reads these keys from yours instead:
+#   authToken         (optional)  token every client presents
+#   claudeOauthToken  (optional)  `claude setup-token` value, or an API key
+#   githubToken       (optional)  for cloning/pushing private repos with gh
+existingSecret: ""
+
+auth:
+  # Empty: the daemon mints one on first boot and keeps it on the data volume
+  # — stable across upgrades, reinstalls and GitOps re-renders. Print it with
+  # the command in the install notes. Set it only to choose your own.
+  token: ""
+
+claude:
+  # Output of `claude setup-token` (headless OAuth, uses your subscription).
+  # Passed to the daemon as CLAUDE_CODE_OAUTH_TOKEN. Prefer
+  # `--set-file claude.oauthToken=…` or existingSecret over committing it.
+  oauthToken: ""
+
+github:
+  # Optional token for `gh`, which the image also uses as git's credential
+  # helper for github.com — private clones and pushes. Passed as GH_TOKEN.
+  token: ""
+
+git:
+  # Identity for commits sessions make inside the pod. Empty: git's default
+  # (which usually refuses to commit), so set these if sessions commit.
+  userName: ""
+  userEmail: ""
+
+daemon:
+  port: 4517
+  # Longer than RENKI_SHUTDOWN_GRACE_SECONDS (default 20) so running turns are
+  # always noted before the pod is killed; matches docker-compose.yml.
+  terminationGracePeriodSeconds: 660
+  # Each live `claude` process can use ~1 GiB; size the limit for how many
+  # sessions you run at once.
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      memory: 6Gi
+  # Extra RENKI_* settings (see .env.example), e.g.
+  #   RENKI_FORCE_PERMISSION_PROMPTS: "1"
+  #   RENKI_LIVE_IDLE_MINUTES: "30"
+  env: {}
+  persistence:
+    # SQLite db, per-session worktrees, trash.
+    data:
+      size: 10Gi
+      storageClass: ""
+    # RENKI_REPOS_ROOT: one subfolder per git repo. Starts empty — clone into
+    # it from the app, or `kubectl exec` (see docs/kubernetes.md).
+    repos:
+      size: 20Gi
+      storageClass: ""
+    # ~/.claude (CLAUDE_CONFIG_DIR): the SDK's per-session transcripts that
+    # resume reads back, plus CLI config. Must persist.
+    claude:
+      size: 2Gi
+      storageClass: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+web:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+service:
+  web:
+    type: ClusterIP
+    port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  # The web app pings its WebSocket every 15s, so default proxy timeouts are
+  # fine without controller-specific annotations.
+  annotations: {}
+  host: renki.example.com
+  # Strongly recommended: the token travels on every request.
+  tls:
+    enabled: false
+    # Existing TLS secret, or the one cert-manager should create (add its
+    # cluster-issuer annotation above).
+    secretName: renki-tls

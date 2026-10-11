@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 # Builds just @renki/web (+ its workspace deps, @renki/protocol and
 # @renki/client-core) as a static production build, served by nginx —
-# the Docker equivalent of the renki-web pm2 process for bare-metal setups.
+# the Docker equivalent of the renki-web pm2 process for bare-metal setups,
+# and the web half of the Kubernetes deployment (deploy/helm/renki).
 # Daemon/VS Code/mobile aren't part of this image.
 
 FROM node:20-bookworm-slim AS base
@@ -49,5 +50,9 @@ RUN pnpm --filter @renki/protocol build && pnpm --filter @renki/client-core buil
 FROM nginx:alpine AS runtime
 COPY --from=builder /app/apps/web/dist /usr/share/nginx/html
 COPY nginx.web.conf /etc/nginx/conf.d/default.conf
+# Optional same-origin /api proxy to the daemon, enabled by setting
+# RENKI_DAEMON_UPSTREAM (the Helm chart in deploy/helm/renki does). Unset, the
+# image is the same static server as before.
+COPY --chmod=0755 deploy/web/40-renki-api-proxy.sh /docker-entrypoint.d/40-renki-api-proxy.sh
 
 EXPOSE 80
