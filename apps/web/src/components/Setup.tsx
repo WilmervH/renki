@@ -1,7 +1,10 @@
-import { describeConnectionError } from "@renki/client-core";
-import { useState } from "react";
+import { describeConnectionError, type PairingPayload } from "@renki/client-core";
+import { useEffect, useRef, useState } from "react";
 import { type AppConfig, getOrCreateDeviceId } from "../lib/config.js";
+import { detectSameOriginDaemon, isSameOrigin, sameOriginApiBase } from "../lib/pairingLink.js";
 import { Button } from "./ui.js";
+
+const LOOPBACK_DEFAULT = "http://127.0.0.1:4517";
 
 /**
  * Point a client at a daemon and enter its token — used both for first-run
@@ -14,18 +17,32 @@ import { Button } from "./ui.js";
  * THAT daemon's other clients). Onboarding doesn't ask for it — with only one
  * host there's nothing to distinguish yet — so callers in that mode can
  * ignore the second argument.
+ *
+ * Two ways it fills itself in (see lib/pairingLink.ts): `initial` from a
+ * pairing link is tested straight away when it points at this site's own
+ * daemon — one naming another server waits for an explicit Connect, since a
+ * crafted link could otherwise point a browser at someone else's daemon
+ * and send it this user's prompts and code. Otherwise it probes this page's own
+ * origin, and if the daemon answers at `/api` (the Kubernetes deployment's
+ * web nginx proxies it there) uses that, leaving only the token to paste.
  */
 export function Setup({
   onSave,
   onCancel,
   mode = "onboarding",
+  initial,
 }: {
   onSave: (config: AppConfig, label: string) => void;
   onCancel?: () => void;
   mode?: "onboarding" | "add-host";
+  initial?: PairingPayload;
 }) {
-  const [baseUrl, setBaseUrl] = useState("http://127.0.0.1:4517");
-  const [token, setToken] = useState("");
+  const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? LOOPBACK_DEFAULT);
+  const [token, setToken] = useState(initial?.token ?? "");
+  const foreignLink = initial !== undefined && !isSameOrigin(initial.baseUrl, window.location.origin);
+  const [sameOrigin, setSameOrigin] = useState(initial !== undefined && !foreignLink);
+  // The probe below must never overwrite a URL the user has started typing.
+  const urlEdited = useRef(false);
   const [showToken, setShowToken] = useState(false);
   const [deviceName, setDeviceName] = useState("Web");
   const [label, setLabel] = useState("");
@@ -34,12 +51,30 @@ export function Setup({
   const [found, setFound] = useState<{ repos: number; root: string } | null>(null);
   const adding = mode === "add-host";
 
-  async function submit() {
+  useEffect(() => {
+    if (initial) {
+      if (!foreignLink) void testConnection(initial.baseUrl, initial.token);
+      return;
+    }
+    let cancelled = false;
+    const origin = window.location.origin;
+    void detectSameOriginDaemon(origin).then((found) => {
+      if (!found || cancelled || urlEdited.current) return;
+      setBaseUrl(sameOriginApiBase(origin));
+      setSameOrigin(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Once, on mount: `initial` is fixed for this screen's lifetime.
+  }, []);
+
+  async function testConnection(url: string, tok: string) {
     setError(null);
     setTesting(true);
     try {
-      const res = await fetch(`${baseUrl.replace(/\/$/, "")}/repos`, {
-        headers: { authorization: `Bearer ${token}` },
+      const res = await fetch(`${url.replace(/\/$/, "")}/repos`, {
+        headers: { authorization: `Bearer ${tok}` },
       });
       if (res.status === 401) throw new Error("Token rejected (401).");
       if (!res.ok) throw new Error(`Daemon responded ${res.status}.`);
@@ -50,6 +85,10 @@ export function Setup({
     } finally {
       setTesting(false);
     }
+  }
+
+  function submit() {
+    void testConnection(baseUrl, token);
   }
 
   function continueSetup() {
@@ -70,10 +109,19 @@ export function Setup({
             <p className="mt-1 text-sm text-(--renki-fg-muted)">
               {adding
                 ? "Another daemon this device can switch to — your Mac, a second server. Uses the same take-control identity you already have."
-                : "Point this browser at the Renki daemon on your homelab and paste its token."}
+                : sameOrigin
+                  ? "This site already reaches your Renki daemon — just paste its token."
+                  : "Point this browser at the Renki daemon on your homelab and paste its token."}
             </p>
           </div>
         </div>
+
+        {foreignLink && (
+          <p className="rounded-lg border border-(--renki-warning)/50 bg-(--renki-warning)/10 px-3 py-2 text-sm text-(--renki-warning)">
+            This link connects to <code>{new URL(initial.baseUrl).host}</code>, not this site. Only continue if
+            that's your own daemon — it will receive everything you send.
+          </p>
+        )}
 
         {adding && (
           <Field label="Name for this host (shown in the switcher)">
@@ -85,6 +133,7 @@ export function Setup({
           <input
             value={baseUrl}
             onChange={(e) => {
+              urlEdited.current = true;
               setBaseUrl(e.target.value);
               setFound(null);
             }}

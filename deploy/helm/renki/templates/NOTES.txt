@@ -1,0 +1,40 @@
+{{- $url := "http://localhost:8080" -}}
+{{- if .Values.ingress.enabled -}}
+{{- $url = printf "%s://%s" (ternary "https" "http" .Values.ingress.tls.enabled) .Values.ingress.host -}}
+{{- end -}}
+Renki is installed. The web app proxies /api to the daemon, so browsers only
+need the token.
+
+{{- if not .Values.ingress.enabled }}
+
+1. Reach the web app (no Ingress enabled):
+
+     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "renki.webName" . }} 8080:{{ .Values.service.web.port }}
+{{- else }}
+
+1. The web app is at {{ $url }}
+{{- if not .Values.ingress.tls.enabled }}
+
+   WARNING: TLS is off — the token crosses the network in the clear.
+   Set ingress.tls.enabled=true.
+{{- end }}
+{{- end }}
+
+2. Open this pairing link once per browser. The token sits in the URL
+   fragment, which is never sent to the server, and the app removes it from
+   the address bar after use:
+
+     echo "{{ $url }}/#token=$(kubectl -n {{ .Release.Namespace }} exec {{ include "renki.daemonName" . }}-0 -- node dist/cli.js token)"
+
+   Or open {{ $url }} and paste the token that command prints.
+
+{{- if and (not .Values.existingSecret) (not .Values.claude.oauthToken) }}
+
+3. No Claude credentials configured. Either upgrade with
+     --set-file claude.oauthToken=<file with `claude setup-token` output>
+   or log in interactively (persisted on the claude volume):
+     kubectl -n {{ .Release.Namespace }} exec -it {{ include "renki.daemonName" . }}-0 -- claude login
+{{- end }}
+
+Repos live on the daemon's "repos" volume (/repos), one folder per repo:
+  kubectl -n {{ .Release.Namespace }} exec -it {{ include "renki.daemonName" . }}-0 -- git -C /repos clone <url>

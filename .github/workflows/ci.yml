@@ -35,3 +35,12 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm test
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v4
+      # Both shapes: chart-managed Secret without Ingress, and BYO Secret with TLS Ingress.
+      - run: helm lint deploy/helm/renki
+      - run: helm lint deploy/helm/renki --set existingSecret=renki --set ingress.enabled=true --set ingress.tls.enabled=true

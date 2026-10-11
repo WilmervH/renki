@@ -4,6 +4,7 @@ import { BrowserRouter, MemoryRouter, Route, Routes, useLocation, useNavigate } 
 import { ClientProvider, useClient, useStoreValue } from "./lib/client.js";
 import { type AppConfig, getOrCreateDeviceId } from "./lib/config.js";
 import { loadHosts, saveHosts } from "./lib/hosts.js";
+import { applyPairing, usePairingFragment } from "./lib/pairingLink.js";
 import { ConnectionBanner } from "./components/ConnectionBanner.js";
 import { HostSwitcher } from "./components/HostSwitcher.js";
 import { RenkiMark } from "./components/ui.js";
@@ -44,6 +45,9 @@ function ManagedApp({ config }: { config: AppConfig }) {
  * happen out from under it; state would just be an unused setter.
  */
 function MultiHostApp() {
+  // A pairing link (`#token=…`, see lib/pairingLink.ts) is read and scrubbed
+  // from the address bar before anything else renders.
+  const [pairing, setPairing] = usePairingFragment();
   const hostsState = loadHosts();
   const active = hostsState.hosts.find((h) => h.id === hostsState.activeId) ?? null;
 
@@ -55,6 +59,23 @@ function MultiHostApp() {
     // "reload after a connection change" pattern Settings' rename-device and
     // PairDevice's reconnect already use.
     window.location.reload();
+  }
+
+  if (pairing) {
+    const hasHosts = hostsState.hosts.length > 0;
+    return (
+      <Setup
+        // Keyed so a link arriving while first-run Setup is already showing
+        // gets a fresh screen (its own initial values + auto-test), not that one's state.
+        key={`pairing:${pairing.baseUrl}:${pairing.token}`}
+        initial={pairing}
+        mode={hasHosts ? "add-host" : "onboarding"}
+        onCancel={hasHosts ? () => setPairing(null) : undefined}
+        onSave={(c, label) => {
+          persist(applyPairing(hostsState, { baseUrl: c.baseUrl, token: c.token }, { deviceName: c.deviceName, label }));
+        }}
+      />
+    );
   }
 
   if (!active) {

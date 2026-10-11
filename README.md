@@ -150,7 +150,9 @@ flowchart LR
 
 See **[SETUP.md](./SETUP.md)** for the full always-on-host + Tailscale
 walkthrough (daemon, web, VS Code, Android, QR pairing, multi-account
-rotation).
+rotation). Running on Kubernetes? See **[docs/kubernetes.md](./docs/kubernetes.md)**
+— a Helm chart that serves the web app and daemon on one origin, so a browser
+only needs the token.
 
 ```bash
 pnpm install && pnpm build

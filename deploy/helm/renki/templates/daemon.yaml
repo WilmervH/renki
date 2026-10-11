@@ -1,0 +1,162 @@
+{{- $daemon := .Values.daemon }}
+{{- $secret := include "renki.secretName" . }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "renki.daemonName" . }}
+  labels:
+    {{- include "renki.labels" . | nindent 4 }}
+    app.kubernetes.io/component: daemon
+spec:
+  # Cluster-internal only: browsers reach the daemon through the web
+  # Service's /api proxy, never directly.
+  type: ClusterIP
+  selector:
+    {{- include "renki.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: daemon
+  ports:
+    - name: http
+      port: {{ $daemon.port }}
+      targetPort: http
+---
+# A StatefulSet of exactly one: the daemon owns a SQLite db and git worktrees
+# on ReadWriteOnce volumes, and the take-control lock assumes one process.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "renki.daemonName" . }}
+  labels:
+    {{- include "renki.labels" . | nindent 4 }}
+    app.kubernetes.io/component: daemon
+spec:
+  replicas: 1
+  serviceName: {{ include "renki.daemonName" . }}
+  selector:
+    matchLabels:
+      {{- include "renki.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: daemon
+  template:
+    metadata:
+      labels:
+        {{- include "renki.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: daemon
+      annotations:
+        # Roll the pod when chart-managed secrets change (e.g. a new setup-token).
+        {{- if not .Values.existingSecret }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ $daemon.terminationGracePeriodSeconds }}
+      containers:
+        - name: daemon
+          image: {{ include "renki.image" (dict "image" .Values.image.daemon "appVersion" .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.image.daemon.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ $daemon.port }}
+          env:
+            # Fixed to match the mounts below.
+            - name: RENKI_HOST
+              value: "0.0.0.0"
+            - name: RENKI_PORT
+              value: {{ $daemon.port | quote }}
+            - name: RENKI_DATA_DIR
+              value: /data
+            - name: RENKI_REPOS_ROOT
+              value: /repos
+            # Keeps the CLI's .claude.json inside the persisted directory too,
+            # not loose in the container's $HOME.
+            - name: CLAUDE_CONFIG_DIR
+              value: /root/.claude
+            - name: RENKI_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: authToken
+                  # Absent: the daemon mints one and persists it on /data.
+                  optional: true
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: claudeOauthToken
+                  optional: true
+            - name: GH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secret }}
+                  key: githubToken
+                  optional: true
+            {{- with .Values.git.userName }}
+            - name: GIT_AUTHOR_NAME
+              value: {{ . | quote }}
+            - name: GIT_COMMITTER_NAME
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.git.userEmail }}
+            - name: GIT_AUTHOR_EMAIL
+              value: {{ . | quote }}
+            - name: GIT_COMMITTER_EMAIL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- range $key, $value := $daemon.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          # /health is the daemon's one unauthenticated route.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+          resources:
+            {{- toYaml $daemon.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: repos
+              mountPath: /repos
+            - name: claude
+              mountPath: /root/.claude
+      {{- with $daemon.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $daemon.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $daemon.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    {{- range $name, $pv := $daemon.persistence }}
+    - metadata:
+        name: {{ $name }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with $pv.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $pv.size }}
+    {{- end }}

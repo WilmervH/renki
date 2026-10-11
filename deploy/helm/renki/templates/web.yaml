@@ -1,0 +1,77 @@
+{{- $web := .Values.web }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "renki.webName" . }}
+  labels:
+    {{- include "renki.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  type: {{ .Values.service.web.type }}
+  selector:
+    {{- include "renki.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+  ports:
+    - name: http
+      port: {{ .Values.service.web.port }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "renki.webName" . }}
+  labels:
+    {{- include "renki.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  replicas: {{ $web.replicas }}
+  selector:
+    matchLabels:
+      {{- include "renki.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        {{- include "renki.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: web
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: web
+          image: {{ include "renki.image" (dict "image" .Values.image.web "appVersion" .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.image.web.pullPolicy }}
+          env:
+            # Turns on the same-origin /api proxy (deploy/web/40-renki-api-proxy.sh).
+            # It carries each browser's own token through; it holds none itself.
+            - name: RENKI_DAEMON_UPSTREAM
+              value: "{{ include "renki.daemonName" . }}:{{ .Values.daemon.port }}"
+          ports:
+            - name: http
+              containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 30
+          resources:
+            {{- toYaml $web.resources | nindent 12 }}
+      {{- with $web.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $web.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $web.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,13 @@
+apiVersion: v2
+name: renki
+description: >-
+  Self-hosted remote control for Claude Code — the daemon and its web app on
+  one origin, so a browser only ever needs the token.
+type: application
+version: 0.1.0
+# Image tag used when image.*.tag is empty. Matches the GHCR tags that
+# .github/workflows/docker-publish.yml pushes for a vX.Y.Z git tag.
+appVersion: "latest"
+home: https://github.com/WilmervH/renki
+sources:
+  - https://github.com/WilmervH/renki

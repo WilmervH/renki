@@ -5,6 +5,8 @@ import { updateHost } from "@renki/client-core";
 import { saveConfig } from "../lib/config.js";
 import { loadHosts, saveHosts } from "../lib/hosts.js";
 import { useClient } from "../lib/client.js";
+import { isHosted } from "../lib/host.js";
+import { buildPairingLink } from "../lib/pairingLink.js";
 
 /**
  * "Pair a device" — renders this browser's own working { baseUrl, token } as a
@@ -37,6 +39,8 @@ export function PairDevice() {
   // set by "Use this for the QR" below, without touching this browser's own connection.
   const [qrOverride, setQrOverride] = useState<string | null>(null);
 
+  const [linkCopy, setLinkCopy] = useState<"idle" | "copied" | "failed">("idle");
+
   const qrBaseUrl = qrOverride ?? config.baseUrl;
   const normalize = (u: string) => u.replace(/\/$/, "");
   const suggestionUsable = suggestion !== "loading" && suggestion !== "none";
@@ -62,6 +66,21 @@ export function PairDevice() {
       })
       .catch(() => setSuggestion("none"));
   }, [open, rest]);
+
+  /**
+   * The browser counterpart of the QR: a link to THIS web app that another
+   * browser opens to connect without typing anything (see lib/pairingLink.ts).
+   * Not offered inside VS Code, whose webview origin isn't a shareable URL.
+   */
+  async function copyPairingLink() {
+    try {
+      await navigator.clipboard.writeText(buildPairingLink(window.location.origin, config.baseUrl, config.token));
+      setLinkCopy("copied");
+    } catch {
+      // Clipboard API is unavailable on a plain-http origin or without permission.
+      setLinkCopy("failed");
+    }
+  }
 
   async function reconnectUsing(url: string) {
     setSwitching(true);
@@ -180,6 +199,18 @@ export function PairDevice() {
             <span className="text-[11px] text-(--renki-fg-muted)">
               Setup → Scan QR. Grants the same access this browser has.
             </span>
+            {!isHosted() && (
+              <button
+                className="rounded-sm border border-(--renki-border) px-3 py-1 text-xs text-(--renki-fg) hover:bg-(--renki-hover)"
+                onClick={() => void copyPairingLink()}
+              >
+                {linkCopy === "copied"
+                  ? "Link copied — treat it like the token"
+                  : linkCopy === "failed"
+                    ? "Couldn't copy (needs HTTPS)"
+                    : "Copy browser pairing link"}
+              </button>
+            )}
             <button
               className="mt-1 rounded-sm border border-(--renki-border) px-3 py-1 text-xs text-(--renki-fg) hover:bg-(--renki-hover)"
               onClick={() => setOpen(false)}
